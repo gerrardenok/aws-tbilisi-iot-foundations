@@ -3,6 +3,8 @@ import time
 import Adafruit_DHT
 import argparse
 import boto3
+import json
+from datetime import datetime
 from AWSIoTPythonSDK.MQTTLib import AWSIoTMQTTClient
 
 # Parse command-line arguments
@@ -18,6 +20,8 @@ endpoint = args.endpoint
 root_ca = f'{args.certificates}/root-ca.pem'
 private_key = f'{args.certificates}/private.pem.key'
 certificate = f'{args.certificates}/certificate.pem.crt'
+QoS = 0
+
 
 # Configure DHT22 sensor
 DHT_SENSOR = Adafruit_DHT.DHT22
@@ -34,23 +38,56 @@ mqtt_client.configureDrainingFrequency(2)
 mqtt_client.configureConnectDisconnectTimeout(10)
 mqtt_client.configureMQTTOperationTimeout(5)
 
-# Connect to AWS IoT Core
-mqtt_client.connect()
+# Configure Last Will and Testament message
+last_will_payload = '{"status": "disconnected"}'
+mqtt_client.configureLastWill('dht22/status', last_will_payload, QoS)
 
 # Function to read data from the DHT22 sensor
 def read_dht22_data():
     humidity, temperature = Adafruit_DHT.read_retry(DHT_SENSOR, DHT_PIN)
     return humidity, temperature
 
-# Send data to AWS IoT Core every X seconds
-while True:
-    humidity, temperature = read_dht22_data()
-    if humidity is not None and temperature is not None:
-        payload = f'{{"temperature": {temperature:.2f}, "humidity": {humidity:.2f}}}'
-        mqtt_client.publish('dht22/data', payload, 1)
-        print(f'Published: {payload}')
-    else:
-        print('Failed to read sensor data.')
-    time.sleep(args.interval)
+# Function to handle start command
+def start_handler(client, userdata, message):
+    global send_data
+    send_data = True
+    print('Starting data transmission...')
+    timestamp = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+    ack_payload = json.dumps({'timestamp': timestamp})
+    mqtt_client.publish('dht22/cmd/start/ack', ack_payload, QoS)
 
-mqtt_client.disconnect()
+# Function to handle stop command
+def stop_handler(client, userdata, message):
+    global send_data
+    send_data = False
+    print('Stopping data transmission...')
+    timestamp = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+    ack_payload = json.dumps({'timestamp': timestamp})
+    mqtt_client.publish('dht22/cmd/stop/ack', ack_payload, QoS)
+
+# Connect to AWS IoT Core
+mqtt_client.connect()
+mqtt_client.subscribe('dht22/cmd/start', 1, start_handler)
+mqtt_client.subscribe('dht22/cmd/stop', 1, stop_handler)
+
+# Initialize send_data flag
+send_data = False
+
+# Main loop to send data to AWS IoT Core every X seconds
+while True:
+    if send_data:
+        humidity, temperature = read_dht22_data()
+        if humidity is not None and temperature is not None:
+            timestamp = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+            payload = json.dumps({
+                'temperature': round(temperature, 2),
+                'humidity': round(humidity, 2),
+                'timestamp': timestamp
+            })
+            mqtt_client.publish('dht22/data', payload, QoS)
+            print(f'Published: {payload}')
+        else:
+            print('Failed to read sensor data.')
+    else:
+        print('Idle...')
+    time.sleep(args.interval)
