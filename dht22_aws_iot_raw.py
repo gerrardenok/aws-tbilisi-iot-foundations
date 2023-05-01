@@ -1,8 +1,6 @@
-import sys
 import time
 import Adafruit_DHT
 import argparse
-import boto3
 import json
 from datetime import datetime
 from AWSIoTPythonSDK.MQTTLib import AWSIoTMQTTClient
@@ -25,7 +23,7 @@ QoS = 0
 
 # Configure DHT22 sensor
 DHT_SENSOR = Adafruit_DHT.DHT22
-DHT_PIN = 14  # GPIO 14
+DHT_PIN = 21  # GPIO 21
 
 # Initiate the AWS IoT MQTT client
 mqtt_client = AWSIoTMQTTClient(client_id)
