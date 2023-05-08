@@ -2,7 +2,8 @@ import time
 import Adafruit_DHT
 import argparse
 import json
-from AWSIoTPythonSDK.MQTTLib import AWSIoTMQTTShadowClient
+from awscrt import io, mqtt
+from awsiot import mqtt_connection_builder
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser()
@@ -10,9 +11,6 @@ parser.add_argument('--endpoint', help='AWS IoT Core endpoint')
 parser.add_argument('--certificates', help='Path to the certificates folder')
 parser.add_argument('--interval', type=int, help='Interval of sending data in seconds', default=1)
 args = parser.parse_args()
-
-# Initialize send_data flag
-send_data = False
 
 # AWS IoT Core settings
 thing_name = 'dht22_aws_iot_shadow'
@@ -25,20 +23,63 @@ certificate = f'{args.certificates}/certificate.pem.crt'
 DHT_SENSOR = Adafruit_DHT.DHT22
 DHT_PIN = 21  # GPIO 21
 
-# Initiate the AWS IoT MQTT Shadow client
-shadow_client = AWSIoTMQTTShadowClient(thing_name)
-shadow_client.configureEndpoint(endpoint, 8883)
-shadow_client.configureCredentials(root_ca, private_key, certificate)
+# Initialize send_data flag
+send_data = False
 
-shadow_client.configureAutoReconnectBackoffTime(1, 32, 20)
-shadow_client.configureConnectDisconnectTimeout(10)
-shadow_client.configureMQTTOperationTimeout(5)
+# Set QoS level 1
+QoS = mqtt.QoS.AT_LEAST_ONCE
+
+# Initialize the IoT SDK
+event_loop_group = io.EventLoopGroup(1)
+host_resolver = io.DefaultHostResolver(event_loop_group)
+client_bootstrap = io.ClientBootstrap(event_loop_group, host_resolver)
+
+# Create a MQTT connection
+mqtt_connection = mqtt_connection_builder.mtls_from_path(
+    endpoint=endpoint,
+    cert_filepath=certificate,
+    pri_key_filepath=private_key,
+    client_bootstrap=client_bootstrap,
+    ca_filepath=root_ca,
+    on_connection_interrupted=None,
+    on_connection_resumed=None,
+    client_id=thing_name,
+    clean_session=False,
+    keep_alive_secs=6
+)
 
 # Connect to AWS IoT Core
-shadow_client.connect()
+connect_future = mqtt_connection.connect()
+connect_future.result()
+print('Connected to AWS IoT Core')
 
-# Create a shadow handler
-shadow_handler = shadow_client.createShadowHandlerWithName(thing_name, False)
+# Function to handle shadow get response
+def on_shadow_get_response(topic, payload, dup, qos, retain, **kwargs):
+    global send_data
+    payload_dict = json.loads(payload)
+    desired_state = payload_dict.get('state', {}).get('desired', {})
+    send_data = desired_state.get('send_data', False)
+    print(f'Initial send_data state: {send_data}')
+
+# Subscribe to shadow get response topic
+shadow_get_response_topic = f'$aws/things/{thing_name}/shadow/get/accepted'
+subscribe_future, packet_id = mqtt_connection.subscribe(
+    topic=shadow_get_response_topic,
+    qos=QoS,
+    callback=on_shadow_get_response
+)
+subscribe_result = subscribe_future.result()
+
+# Request current shadow state
+shadow_get_topic = f'$aws/things/{thing_name}/shadow/get'
+mqtt_connection.publish(
+    topic=shadow_get_topic,
+    payload='',
+    qos=QoS
+)
+
+# Wait for the initial state to be loaded
+time.sleep(2)
 
 # Function to read data from the DHT22 sensor
 def read_dht22_data():
@@ -46,7 +87,7 @@ def read_dht22_data():
     return humidity, temperature
 
 # Function to handle shadow updates
-def shadow_delta_callback(payload, responseStatus, token):
+def on_shadow_delta_received(topic, payload, dup, qos, retain, **kwargs):
     global send_data
     payload_dict = json.loads(payload)
     desired_state = payload_dict['state']
@@ -54,18 +95,13 @@ def shadow_delta_callback(payload, responseStatus, token):
         send_data = desired_state['send_data']
 
 # Subscribe to shadow updates
-shadow_handler.shadowRegisterDeltaCallback(shadow_delta_callback)
-
-# Load initial state of send_data from Shadow
-def shadow_get_callback(payload, response_status, token):
-    global send_data
-    payload_dict = json.loads(payload)
-    desired_state = payload_dict.get('state', {}).get('desired', {})
-    send_data = desired_state.get('send_data', False)
-    print(f'Initial send_data state: {send_data}')
-
-shadow_handler.shadowGet(shadow_get_callback, 5)
-time.sleep(2)
+shadow_delta_topic = f'$aws/things/{thing_name}/shadow/update/delta'
+subscribe_future, packet_id = mqtt_connection.subscribe(
+    topic=shadow_delta_topic,
+    qos=mqtt.QoS.AT_LEAST_ONCE,
+    callback=on_shadow_delta_received
+)
+subscribe_result = subscribe_future.result()
 
 # Main loop to send data to AWS IoT Core every X seconds
 try:
@@ -81,14 +117,20 @@ try:
                         }
                     }
                 })
-                shadow_handler.shadowUpdate(payload, None, 5)
-                print(f'Published: {payload}')
+                shadow_update_topic = f'$aws/things/{thing_name}/shadow/update'
+                if send_data:
+                    mqtt_connection.publish(
+                        topic=shadow_update_topic,
+                        payload=payload,
+                        qos=QoS
+                    )
+                    print(f'Published: {payload}')
             else:
                 print('Failed to read sensor data.')
         else:
             print('Idle...')
         time.sleep(args.interval)
 except KeyboardInterrupt:
-    print('Interrupted: Disconnecting shadow client...')
-    shadow_client.disconnect()
-    print('Shadow client disconnected. Exiting.')
+    print('Interrupted: Disconnecting MQTT connection...')
+    disconnect_future = mqtt_connection.disconnect()
+    disconnect_future.result()
