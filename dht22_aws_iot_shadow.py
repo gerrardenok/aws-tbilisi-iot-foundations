@@ -57,8 +57,8 @@ print('Connected to AWS IoT Core')
 def on_shadow_get_response(topic, payload, dup, qos, retain, **kwargs):
     global send_data
     payload_dict = json.loads(payload)
-    desired_state = payload_dict.get('state', {}).get('desired', {})
-    send_data = desired_state.get('send_data', False)
+    reported_state = payload_dict.get('state', {}).get('reported', {})
+    send_data = reported_state.get('send_data', False)
     print(f'Initial send_data state: {send_data}')
 
 # Subscribe to shadow get response topic
@@ -92,13 +92,30 @@ def on_shadow_delta_received(topic, payload, dup, qos, retain, **kwargs):
     payload_dict = json.loads(payload)
     desired_state = payload_dict['state']
     if 'send_data' in desired_state:
+        # Update Internal State
         send_data = desired_state['send_data']
+
+        # Acknowledgement: Update the reported state
+        shadow_update_topic = f'$aws/things/{thing_name}/shadow/update'
+        shadow_update_payload = json.dumps({
+            'state': {
+                'reported': {
+                    'send_data': send_data
+                }
+            }
+        })
+        mqtt_connection.publish(
+            topic=shadow_update_topic,
+            payload=shadow_update_payload,
+            qos=QoS
+        )
+        print(f'Updated reported send_data state: {send_data}')
 
 # Subscribe to shadow updates
 shadow_delta_topic = f'$aws/things/{thing_name}/shadow/update/delta'
 subscribe_future, packet_id = mqtt_connection.subscribe(
     topic=shadow_delta_topic,
-    qos=mqtt.QoS.AT_LEAST_ONCE,
+    qos=QoS,
     callback=on_shadow_delta_received
 )
 subscribe_result = subscribe_future.result()
