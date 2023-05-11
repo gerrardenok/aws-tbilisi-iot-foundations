@@ -4,8 +4,8 @@ This repository contains a demos in Python for a presentation on IoT (Internet o
 
 ## Presentation Slides
 
-- [PDF](./IoT Foundations - Kickstart Your Journey with AWS.pdf)
-- [PPTX](./IoT Foundations - Kickstart Your Journey with AWS.pptx)
+- [PDF](./slides.pdf)
+- [PPTX](./slides.pptx)
 
 ## Prerequisites
 
