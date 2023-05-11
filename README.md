@@ -1,6 +1,11 @@
 # AWS Tbilisi User Group - IoT Foundations
 
-This Python script reads data from a DHT22 sensor connected to a Raspberry Pi 4 via the GPIO and sends messages to AWS IoT Core with the current sensor measurements (temperature and humidity) at a specified interval.
+This repository contains a demos in Python for a presentation on IoT (Internet of Things) titled ["Introduction to IoT Foundations - Kickstart Your Journey with AWS."](https://www.meetup.com/aws-tbilisi/events/293215777/) The presentation will be delivered by Mikhail Vataleu on Thursday, May 11th at a meetup in Tbilisi organized by @Klika Tech and @AWS User Group Meetup.
+
+## Presentation Slides
+
+- [PDF](./IoT Foundations - Kickstart Your Journey with AWS.pdf)
+- [PPTX](./IoT Foundations - Kickstart Your Journey with AWS.pptx)
 
 ## Prerequisites
 
